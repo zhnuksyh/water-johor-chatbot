@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+
+# AI Models (Large Files)
+backend/models/
+*.gguf
+*.bin
+*.onnx
+*.tar.gz
+
+# IDE
+.vscode/
+.idea/
+
+# Backend
+backend/models/
+
+# Logs
+*.log
+npm-debug.log*
