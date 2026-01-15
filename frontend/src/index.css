@@ -4,6 +4,7 @@
 body {
   font-family: 'Poppins', sans-serif;
   @apply bg-zinc-950 text-white;
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 /* Custom Scrollbar */
