@@ -26,3 +26,11 @@ backend/models/
 # Logs
 *.log
 npm-debug.log*
+
+# Legacy/Debris
+index.jsx
+services/
+
+# Security matches
+backend/*.pem
+backend/*.key
