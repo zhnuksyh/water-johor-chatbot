@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import LiveMode from './LiveMode';
 import { chatCompletion, transcribeAudio, synthesizeSpeech } from './services/api';
 import {
     Mic,
@@ -8,7 +9,8 @@ import {
     Bot,
     PanelLeftOpen,
     X,
-    StopCircle
+    StopCircle,
+    AudioLines
 } from 'lucide-react';
 
 // ==========================================
@@ -125,6 +127,9 @@ export default function AquaChat() {
 
     // [STATE NOTE]: Controls the TTS (Text-to-Speech) state.
     const [isSpeaking, setIsSpeaking] = useState(false);
+
+    // Live Mode State
+    const [isLiveMode, setIsLiveMode] = useState(false);
 
     // Refs
     const messagesEndRef = useRef(null);
@@ -319,6 +324,17 @@ export default function AquaChat() {
         speak(aiText);
     };
 
+    // --- Live Mode Handler ---
+    const handleLiveMessage = (msg) => {
+        // Appends voice messages to the chat history
+        const newMessage = { ...msg, timestamp: Date.now() };
+        setMessages(prev => {
+            const updated = [...prev, newMessage];
+            updateSessionMessages(updated, currentSessionId);
+            return updated;
+        });
+    };
+
     // ==========================================
     // SPEECH-TO-TEXT (STT) LOGIC
     // ==========================================
@@ -376,6 +392,8 @@ export default function AquaChat() {
     return (
         <div className="flex h-screen bg-[#09090b] text-zinc-100 font-sans overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-100 relative">
             <GlobalStyles />
+
+            {isLiveMode && <LiveMode onClose={() => setIsLiveMode(false)} />}
 
             {/* Background Ambient Glows */}
             <div className="fixed top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-cyan-900/10 blur-[120px] pointer-events-none" />
@@ -573,6 +591,15 @@ export default function AquaChat() {
                             ) : (
                                 <Mic size={18} strokeWidth={2.5} />
                             )}
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setIsLiveMode(true)}
+                            aria-label="Start Live Mode"
+                            className="h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px] hover:bg-zinc-700/50 text-zinc-400 hover:text-green-400 mr-1"
+                        >
+                            <AudioLines size={18} strokeWidth={2.5} />
                         </button>
 
                         <textarea

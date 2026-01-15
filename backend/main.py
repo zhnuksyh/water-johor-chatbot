@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+import json
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
@@ -40,7 +41,8 @@ MODELS_DIR = Path("models")
 LLM_PATH = MODELS_DIR / "llm" / "model.gguf"
 STT_MODEL_SIZE = "distil-medium.en" # or "base.en"
 PIPER_DIR = MODELS_DIR / "tts" / "piper"
-PIPER_VOICE = MODELS_DIR / "tts" / "en_US-amy-medium.onnx"
+PIPER_DIR = MODELS_DIR / "tts" / "piper"
+PIPER_VOICE = MODELS_DIR / "tts" / "en_US-ryan-medium.onnx"
 
 # --- Global Model Instances ---
 llm_model = None
@@ -198,6 +200,139 @@ async def synthesize_speech(request: TTSRequest):
     except Exception as e:
         print(f"TTS Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/ws/live")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    client_id = id(websocket)
+    print(f"WS Client {client_id} connected")
+    
+    audio_buffer = bytearray()
+    
+    try:
+        while True:
+            message = await websocket.receive()
+            
+            if "bytes" in message:
+                audio_buffer.extend(message["bytes"])
+                
+            elif "text" in message:
+                try:
+                    data = json.loads(message["text"])
+                except json.JSONDecodeError:
+                    continue
+
+                if data.get("type") == "interrupt":
+                    print(f"WS Client {client_id} INTERRUPTED")
+                    # Clear any processing queues or flags here if we had async tasks
+                    # For this simple synchronous loop, the 'check' needs to happen 
+                    # inside the generation loop if we were streaming LLM tokens.
+                    # Since we do blocking calls, we can't truly 'cancel' the subprocess easily 
+                    # without refactoring to asyncio subprocesses.
+                    # For now, we just clear the buffer to ensure next speech is clean.
+                    audio_buffer = bytearray()
+                    continue
+
+                if data.get("type") == "commit":
+                    print(f"WS Client {client_id} committed {len(audio_buffer)} bytes")
+                    
+                    if not audio_buffer:
+                        await websocket.send_json({"type": "error", "message": "No audio sent"})
+                        continue
+                        
+                    # 1. Save to temp file
+                    # We assume the client sends a valid audio format (e.g. WAV or PCM that Whisper can guess, 
+                    # or the user is just sending a WebM blob).
+                    # Ideally we'd use soundfile to write raw PCM, but let's try writing the raw bytes first.
+                    temp_input = f"temp_live_{client_id}.wav"
+                    with open(temp_input, "wb") as f:
+                        f.write(audio_buffer)
+                        
+                    # 2. Transcribe
+                    text_input = ""
+                    if stt_model:
+                        try:
+                            # beam_size=5 for consistency
+                            segments, _ = stt_model.transcribe(temp_input, beam_size=5)
+                            text_input = " ".join([s.text for s in segments]).strip()
+                        except Exception as e:
+                            print(f"WS STT Error: {e}")
+                            text_input = ""
+                    else:
+                        text_input = "[MOCK STT] Hello there"
+                    
+                    print(f"WS Transcribed: {text_input}")
+                    await websocket.send_json({"type": "transcription", "text": text_input})
+
+                    if not text_input:
+                        # Reset
+                        audio_buffer = bytearray()
+                        if os.path.exists(temp_input):
+                            os.remove(temp_input)
+                        continue
+
+                    # 3. LLM
+                    response_text = ""
+                    if llm_model:
+                        prompt_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                        prompt_messages.append({"role": "user", "content": text_input})
+                        try:
+                            output = llm_model.create_chat_completion(
+                                messages=prompt_messages,
+                                max_tokens=128,
+                                temperature=0.7
+                            )
+                            response_text = output["choices"][0]["message"]["content"]
+                        except Exception as e:
+                            print(f"WS LLM Error: {e}")
+                            response_text = "I encountered an error thinking."
+                    else:
+                        response_text = f"I heard: {text_input}. (LLM Off)"
+                        
+                    print(f"WS LLM Response: {response_text}")
+                    await websocket.send_json({"type": "text_response", "text": response_text})
+                    
+                    # 4. TTS and Stream back
+                    piper_exec = PIPER_DIR / "piper"
+                    if piper_exec.exists() and PIPER_VOICE.exists():
+                        try:
+                            cmd = [
+                                str(piper_exec),
+                                "--model", str(PIPER_VOICE),
+                                "--output_file", "-"
+                            ]
+                            
+                            proc = subprocess.Popen(
+                                cmd,
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE
+                            )
+                            
+                            stdout, stderr = proc.communicate(input=response_text.encode("utf-8"))
+                            
+                            if proc.returncode == 0:
+                                # Send audio in chunks
+                                chunk_size = 4096
+                                for i in range(0, len(stdout), chunk_size):
+                                    await websocket.send_bytes(stdout[i:i+chunk_size])
+                                # Notify end of audio
+                                await websocket.send_json({"type": "audio_end"})
+                            else:
+                                print(f"WS Piper Error: {stderr.decode()}")
+                        except Exception as e:
+                            print(f"WS TTS Exception: {e}")
+                    else:
+                        print("Piper unavailable for WS TTS")
+                    
+                    # Reset buffer and cleanup
+                    audio_buffer = bytearray()
+                    if os.path.exists(temp_input):
+                        os.remove(temp_input)
+
+    except WebSocketDisconnect:
+        print(f"WS Client {client_id} disconnected")
+
 
 if __name__ == "__main__":
     import uvicorn
