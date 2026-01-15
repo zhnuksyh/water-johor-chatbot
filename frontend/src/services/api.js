@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:5000/v1';
+const API_BASE_URL = `https://${window.location.hostname}:5000/v1`;
 
 /**
  * Sends chat history and user message to the local LLM backend.

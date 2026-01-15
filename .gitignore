@@ -26,3 +26,6 @@ backend/models/
 # Logs
 *.log
 npm-debug.log*
+
+*.pem
+*.key
