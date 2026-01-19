@@ -1,28 +1,38 @@
-
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Mic, MicOff, Volume2 } from 'lucide-react';
+import { X } from 'lucide-react';
+
+// Define the shape of a message as expected by the parent component
+interface ChatMessage {
+    role: 'user' | 'model' | 'assistant';
+    text: string;
+}
+
+interface LiveModeProps {
+    onClose: () => void;
+    onAddMessage: (message: ChatMessage) => void;
+}
 
 const VAD_THRESHOLD = 0.012;  // Slightly increased to avoid background noise
 const SILENCE_DURATION = 2000; // Longer silence required to commit (avoid chopping)
 
-const LiveMode = ({ onClose, onAddMessage }) => {
-    const [status, setStatus] = useState('Connecting...');
-    const [isSpeaking, setIsSpeaking] = useState(false); // User is speaking
-    const [isAquaSpeaking, setIsAquaSpeaking] = useState(false); // Aqua is speaking
-    const [volume, setVolume] = useState(0);
+const LiveMode: React.FC<LiveModeProps> = ({ onClose, onAddMessage }) => {
+    const [status, setStatus] = useState<string>('Connecting...');
+    const [isSpeaking, setIsSpeaking] = useState<boolean>(false); // User is speaking
+    const [isAquaSpeaking, setIsAquaSpeaking] = useState<boolean>(false); // Aqua is speaking
+    const [volume, setVolume] = useState<number>(0);
 
-    const websocketRef = useRef(null);
-    const mediaRecorderRef = useRef(null);
-    const audioContextRef = useRef(null);
-    const analyserRef = useRef(null);
-    const sourceRef = useRef(null);
+    const websocketRef = useRef<WebSocket | null>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
 
-    const audioQueueRef = useRef([]);
-    const isPlayingRef = useRef(false);
-    const currentSourceNodeRef = useRef(null);
+    const audioQueueRef = useRef<ArrayBuffer[]>([]);
+    const isPlayingRef = useRef<boolean>(false);
+    const currentSourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
 
-    const silenceTimerRef = useRef(null);
-    const isRecordingRef = useRef(false);
+    const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const isRecordingRef = useRef<boolean>(false);
 
     // Initialize Connection & Audio
     useEffect(() => {
@@ -37,7 +47,7 @@ const LiveMode = ({ onClose, onAddMessage }) => {
             startListening(); // Auto-start
         };
 
-        websocketRef.current.onmessage = async (event) => {
+        websocketRef.current.onmessage = async (event: MessageEvent) => {
             // Handle Binary Audio
             if (event.data instanceof ArrayBuffer) {
                 audioQueueRef.current.push(event.data);
@@ -48,16 +58,20 @@ const LiveMode = ({ onClose, onAddMessage }) => {
             }
 
             // Handle Text Messages
-            const data = JSON.parse(event.data);
-            if (data.type === 'transcription') {
-                setStatus('Thinking...');
-                if (onAddMessage && data.text) onAddMessage({ role: 'user', text: data.text });
-            } else if (data.type === 'text_response') {
-                setStatus('Speaking...');
-                setIsAquaSpeaking(true);
-                if (onAddMessage && data.text) onAddMessage({ role: 'model', text: data.text });
-            } else if (data.type === 'audio_end') {
-                // We handle end via queue empty check mostly
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'transcription') {
+                    setStatus('Thinking...');
+                    if (onAddMessage && data.text) onAddMessage({ role: 'user', text: data.text });
+                } else if (data.type === 'text_response') {
+                    setStatus('Speaking...');
+                    setIsAquaSpeaking(true);
+                    if (onAddMessage && data.text) onAddMessage({ role: 'model', text: data.text });
+                } else if (data.type === 'audio_end') {
+                    // We handle end via queue empty check mostly
+                }
+            } catch (e) {
+                console.error("Error parsing WebSocket message:", e);
             }
         };
 
@@ -68,10 +82,10 @@ const LiveMode = ({ onClose, onAddMessage }) => {
 
     const cleanup = () => {
         if (websocketRef.current) websocketRef.current.close();
-        if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop();
         if (audioContextRef.current) audioContextRef.current.close();
         if (currentSourceNodeRef.current) currentSourceNodeRef.current.stop();
-        clearTimeout(silenceTimerRef.current);
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     };
 
     // Playback Logic
@@ -86,6 +100,8 @@ const LiveMode = ({ onClose, onAddMessage }) => {
         isPlayingRef.current = true;
         setIsAquaSpeaking(true);
         const chunk = audioQueueRef.current.shift();
+
+        if (!chunk) return;
 
         try {
             if (!audioContextRef.current) return;
@@ -129,7 +145,8 @@ const LiveMode = ({ onClose, onAddMessage }) => {
     const startListening = async () => {
         try {
             // 1. Setup Audio Context for VAD
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            const audioCtx = new AudioContextClass();
             audioContextRef.current = audioCtx;
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -190,7 +207,7 @@ const LiveMode = ({ onClose, onAddMessage }) => {
             }
 
             // Reset silence timer
-            clearTimeout(silenceTimerRef.current);
+            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
             silenceTimerRef.current = setTimeout(() => {
                 // Silence Detected
                 console.log("Speech End (Commit)");
@@ -209,7 +226,7 @@ const LiveMode = ({ onClose, onAddMessage }) => {
         if (!isSpeaking && !isRecordingRef.current) return;
 
         console.log("Force Commit (Manual Tap)");
-        clearTimeout(silenceTimerRef.current);
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         setIsSpeaking(false);
         isRecordingRef.current = false;
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import LiveMode from './LiveMode';
-import { chatCompletion, transcribeAudio, synthesizeSpeech } from './services/api';
+import { chatCompletion, transcribeAudio, synthesizeSpeech, ChatMessage } from './services/api';
 import {
     Mic,
     Send,
@@ -107,38 +107,51 @@ const GlobalStyles = () => (
 );
 
 // ==========================================
-// MAIN COMPONENT
+// INTERFACES
 // ==========================================
+
+interface UIMessage extends ChatMessage {
+    timestamp: number;
+}
+
+interface Session {
+    id: string;
+    createdAt: number;
+    updatedAt: number;
+    title: string;
+    messages: UIMessage[];
+}
+
 // ==========================================
 // MAIN COMPONENT
 // ==========================================
 export default function AquaChat() {
     // State Management
-    const [sessions, setSessions] = useState([]);
-    const [currentSessionId, setCurrentSessionId] = useState(null);
-    const [messages, setMessages] = useState([]);
-    const [inputText, setInputText] = useState("");
+    const [sessions, setSessions] = useState<Session[]>([]);
+    const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const [messages, setMessages] = useState<UIMessage[]>([]);
+    const [inputText, setInputText] = useState<string>("");
 
     // [STATE NOTE]: Controls the STT (Speech-to-Text) state.
-    const [isListening, setIsListening] = useState(false);
+    const [isListening, setIsListening] = useState<boolean>(false);
 
-    const [isSidebarOpen, setSidebarOpen] = useState(true);
-    const [isGenerating, setIsGenerating] = useState(false);
+    const [isSidebarOpen, setSidebarOpen] = useState<boolean>(true);
+    const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
     // [STATE NOTE]: Controls the TTS (Text-to-Speech) state.
-    const [isSpeaking, setIsSpeaking] = useState(false);
+    const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
 
     // Live Mode State
-    const [isLiveMode, setIsLiveMode] = useState(false);
+    const [isLiveMode, setIsLiveMode] = useState<boolean>(false);
 
     // Refs
-    const messagesEndRef = useRef(null);
-    const textAreaRef = useRef(null);
-    const audioRef = useRef(null); // Ref for playing audio
+    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+    const audioRef = useRef<HTMLAudioElement | null>(null); // Ref for playing audio
 
     // STT Refs
-    const mediaRecorderRef = useRef(null);
-    const audioChunksRef = useRef([]);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
 
     // ==========================================
     // DATA PERSISTENCE (LOCAL STORAGE)
@@ -149,7 +162,7 @@ export default function AquaChat() {
         const savedSessions = localStorage.getItem('aqua_sessions');
         if (savedSessions) {
             try {
-                const parsed = JSON.parse(savedSessions);
+                const parsed: Session[] = JSON.parse(savedSessions);
                 // Sort by updatedAt desc
                 parsed.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
                 setSessions(parsed);
@@ -202,7 +215,7 @@ export default function AquaChat() {
     // ==========================================
     const createNewSession = () => {
         const newId = `session_${Date.now()}`;
-        const newSession = {
+        const newSession: Session = {
             id: newId,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -215,7 +228,7 @@ export default function AquaChat() {
         if (window.innerWidth < 768) setSidebarOpen(false);
     };
 
-    const deleteSession = (e, sessionId) => {
+    const deleteSession = (e: React.MouseEvent, sessionId: string) => {
         e.stopPropagation();
         if (!confirm("Delete this chat?")) return;
 
@@ -234,7 +247,7 @@ export default function AquaChat() {
         }
     };
 
-    const updateSessionMessages = (updatedMessages, sessionId) => {
+    const updateSessionMessages = (updatedMessages: UIMessage[], sessionId: string) => {
         setSessions(prevSessions => {
             return prevSessions.map(session => {
                 if (session.id === sessionId) {
@@ -264,7 +277,7 @@ export default function AquaChat() {
     // ==========================================
     // TEXT-TO-SPEECH (TTS) LOGIC
     // ==========================================
-    const speak = async (text) => {
+    const speak = async (text: string) => {
         stopSpeaking(); // Stop any current audio
         setIsSpeaking(true);
         try {
@@ -304,16 +317,16 @@ export default function AquaChat() {
         stopSpeaking();
         const userMsgText = inputText;
         setInputText("");
-        const newUserMsg = { role: 'user', text: userMsgText, timestamp: Date.now() };
+        const newUserMsg: UIMessage = { role: 'user', text: userMsgText, timestamp: Date.now() };
         const newMessages = [...messages, newUserMsg];
         setMessages(newMessages);
         setIsGenerating(true);
         updateSessionMessages(newMessages, currentSessionId);
 
-        const historyForApi = newMessages.filter(m => m.role !== 'system');
-        const aiText = await chatCompletion(historyForApi.slice(0, -1), userMsgText);
+        const historyForApi = newMessages.filter(m => m.role !== 'system' && (m.role === 'user' || m.role === 'model')); // Ensure valid roles
+        const aiText = await chatCompletion(historyForApi, userMsgText);
 
-        const newAiMsg = { role: 'model', text: aiText, timestamp: Date.now() };
+        const newAiMsg: UIMessage = { role: 'model', text: aiText, timestamp: Date.now() };
         const finalMessages = [...newMessages, newAiMsg];
 
         setMessages(finalMessages);
@@ -325,9 +338,11 @@ export default function AquaChat() {
     };
 
     // --- Live Mode Handler ---
-    const handleLiveMessage = (msg) => {
+    const handleLiveMessage = (msg: ChatMessage) => {
         // Appends voice messages to the chat history
-        const newMessage = { ...msg, timestamp: Date.now() };
+        if (!currentSessionId) return;
+
+        const newMessage: UIMessage = { ...msg, timestamp: Date.now() };
         setMessages(prev => {
             const updated = [...prev, newMessage];
             updateSessionMessages(updated, currentSessionId);
@@ -393,7 +408,7 @@ export default function AquaChat() {
         <div className="flex h-screen bg-[#09090b] text-zinc-100 font-sans overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-100 relative">
             <GlobalStyles />
 
-            {isLiveMode && <LiveMode onClose={() => setIsLiveMode(false)} />}
+            {isLiveMode && <LiveMode onClose={() => setIsLiveMode(false)} onAddMessage={handleLiveMessage} />}
 
             {/* Background Ambient Glows */}
             <div className="fixed top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-cyan-900/10 blur-[120px] pointer-events-none" />
