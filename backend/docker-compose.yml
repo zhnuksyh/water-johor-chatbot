@@ -1,0 +1,18 @@
+version: "3.9"
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0
+    network_mode: host
+    environment:
+      - LIVEKIT_REDIS_ADDRESS=127.0.0.1:6380
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --port 6380 --save 60 1 --loglevel warning
+    network_mode: host
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

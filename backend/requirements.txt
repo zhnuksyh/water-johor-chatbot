@@ -6,3 +6,5 @@ llama-cpp-python
 faster-whisper
 soundfile
 numpy
+livekit-agents
+livekit-plugins-silero
