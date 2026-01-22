@@ -1,0 +1,17 @@
+[project]
+name = "aqua-chatbot-backend"
+version = "0.1.0"
+description = "Backend for Aqua Chatbot"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "requests",
+    "llama-cpp-python",
+    "faster-whisper",
+]
+
+[tool.uv]
+package = false
