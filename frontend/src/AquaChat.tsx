@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import LiveMode from './LiveMode';
 import { chatCompletion, transcribeAudio, synthesizeSpeech, ChatMessage } from './services/api';
+import { ReportState } from './types';
+import { getUserProfile } from './services/userProfile';
+import { getRandomAvailablePlumber } from './data/plumbers';
+import ReportModeBanner from './components/ReportModeBanner';
+import PlumberConnectionModal from './components/PlumberConnectionModal';
 import {
     Mic,
     Send,
@@ -10,7 +14,7 @@ import {
     PanelLeftOpen,
     X,
     StopCircle,
-    AudioLines
+    Hammer
 } from 'lucide-react';
 
 // ==========================================
@@ -141,8 +145,12 @@ export default function AquaChat() {
     // [STATE NOTE]: Controls the TTS (Text-to-Speech) state.
     const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
 
-    // Live Mode State
-    const [isLiveMode, setIsLiveMode] = useState<boolean>(false);
+    // Report Mode State
+    const [reportState, setReportState] = useState<ReportState>({
+        isActive: false,
+        flowStep: 'idle',
+        issueData: {}
+    });
 
     // Refs
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -317,14 +325,22 @@ export default function AquaChat() {
         stopSpeaking();
         const userMsgText = inputText;
         setInputText("");
+
+        // If in report mode, use the structured flow instead of LLM
+        if (reportState.isActive && reportState.flowStep !== 'idle' && reportState.flowStep !== 'connecting' && reportState.flowStep !== 'connected') {
+            handleReportFlowInput(userMsgText);
+            return;
+        }
+
+        // Normal chat flow - use LLM
         const newUserMsg: UIMessage = { role: 'user', text: userMsgText, timestamp: Date.now() };
         const newMessages = [...messages, newUserMsg];
         setMessages(newMessages);
         setIsGenerating(true);
         updateSessionMessages(newMessages, currentSessionId);
 
-        const historyForApi = newMessages.filter(m => m.role !== 'system' && (m.role === 'user' || m.role === 'model')); // Ensure valid roles
-        const aiText = await chatCompletion(historyForApi, userMsgText);
+        const historyForApi = newMessages.filter(m => m.role !== 'system' && (m.role === 'user' || m.role === 'model'));
+        const aiText = await chatCompletion(historyForApi, userMsgText, 'normal');
 
         const newAiMsg: UIMessage = { role: 'model', text: aiText, timestamp: Date.now() };
         const finalMessages = [...newMessages, newAiMsg];
@@ -337,18 +353,6 @@ export default function AquaChat() {
         speak(aiText);
     };
 
-    // --- Live Mode Handler ---
-    const handleLiveMessage = (msg: ChatMessage) => {
-        // Appends voice messages to the chat history
-        if (!currentSessionId) return;
-
-        const newMessage: UIMessage = { ...msg, timestamp: Date.now() };
-        setMessages(prev => {
-            const updated = [...prev, newMessage];
-            updateSessionMessages(updated, currentSessionId);
-            return updated;
-        });
-    };
 
     // ==========================================
     // SPEECH-TO-TEXT (STT) LOGIC
@@ -403,12 +407,193 @@ export default function AquaChat() {
         }
     };
 
+    // ==========================================
+    // REPORT MODE LOGIC - Structured Flow
+    // ==========================================
+
+    // Predefined responses for each step
+    const REPORT_FLOW_RESPONSES = {
+        ask_problem: "I'm here to help you report a water issue. What's the problem? (e.g., pipe leak, burst pipe, no water, low pressure)",
+        ask_location: "I'm sorry to hear that. Where exactly is this happening? (e.g., kitchen, bathroom, outside)",
+        ask_severity: "Got it. How severe is the issue? Is it a small drip, steady flow, or flooding?",
+        confirm: (data: { problem?: string; location?: string; severity?: string }) =>
+            `Let me confirm: You have a ${data.problem || 'water issue'} in your ${data.location || 'home'}, and it's ${data.severity || 'causing problems'}. I'll connect you with a plumber now.`
+    };
+
+    const enterReportMode = () => {
+        setReportState({
+            isActive: true,
+            flowStep: 'ask_problem',
+            issueData: {}
+        });
+        // Use functional update to ensure we have the latest messages
+        setMessages(prev => {
+            const msg: UIMessage = { role: 'model', text: REPORT_FLOW_RESPONSES.ask_problem, timestamp: Date.now() };
+            const newMessages = [...prev, msg];
+            if (currentSessionId) {
+                updateSessionMessages(newMessages, currentSessionId);
+            }
+            speak(REPORT_FLOW_RESPONSES.ask_problem);
+            return newMessages;
+        });
+    };
+
+    const exitReportMode = () => {
+        setReportState({
+            isActive: false,
+            flowStep: 'idle',
+            issueData: {}
+        });
+        const exitMsg = "Report mode ended. How else can I help you today?";
+        setMessages(prev => {
+            const msg: UIMessage = { role: 'model', text: exitMsg, timestamp: Date.now() };
+            const newMessages = [...prev, msg];
+            if (currentSessionId) {
+                updateSessionMessages(newMessages, currentSessionId);
+            }
+            speak(exitMsg);
+            return newMessages;
+        });
+    };
+
+    const toggleReportMode = () => {
+        if (reportState.isActive) {
+            exitReportMode();
+        } else {
+            enterReportMode();
+        }
+    };
+
+    // Handle user input in report mode - advance the flow
+    const handleReportFlowInput = (userInput: string) => {
+        const input = userInput.trim();
+        if (!input) return;
+
+        // Add user message first, then add Aqua response
+        const userMsg: UIMessage = { role: 'user', text: input, timestamp: Date.now() };
+
+        // Determine the next response based on current step
+        let nextResponse = '';
+        let nextStep = reportState.flowStep;
+        let updatedIssueData = { ...reportState.issueData };
+
+        switch (reportState.flowStep) {
+            case 'ask_problem':
+                nextResponse = REPORT_FLOW_RESPONSES.ask_location;
+                nextStep = 'ask_location';
+                updatedIssueData.problem = input;
+                break;
+
+            case 'ask_location':
+                nextResponse = REPORT_FLOW_RESPONSES.ask_severity;
+                nextStep = 'ask_severity';
+                updatedIssueData.location = input;
+                break;
+
+            case 'ask_severity':
+                updatedIssueData.severity = input;
+                nextResponse = REPORT_FLOW_RESPONSES.confirm(updatedIssueData);
+                nextStep = 'confirm';
+                break;
+
+            default:
+                return;
+        }
+
+        // Update report state
+        setReportState(prev => ({
+            ...prev,
+            flowStep: nextStep,
+            issueData: updatedIssueData
+        }));
+
+        // Add both messages: user message immediately, Aqua response after delay
+        setMessages(prev => {
+            const withUserMsg = [...prev, userMsg];
+            if (currentSessionId) {
+                updateSessionMessages(withUserMsg, currentSessionId);
+            }
+            return withUserMsg;
+        });
+
+        // Add Aqua response after a short delay
+        setTimeout(() => {
+            const aquaMsg: UIMessage = { role: 'model', text: nextResponse, timestamp: Date.now() };
+            setMessages(prev => {
+                const withAquaMsg = [...prev, aquaMsg];
+                if (currentSessionId) {
+                    updateSessionMessages(withAquaMsg, currentSessionId);
+                }
+                speak(nextResponse);
+                return withAquaMsg;
+            });
+
+            // If we just confirmed, initiate plumber connection after another delay
+            if (nextStep === 'confirm') {
+                setTimeout(() => initiatePlumberConnection(), 2000);
+            }
+        }, 500);
+    };
+
+    const initiatePlumberConnection = () => {
+        const userProfile = getUserProfile();
+        const area = userProfile?.area || 'Johor Bahru';
+        const plumber = getRandomAvailablePlumber(area);
+
+        setReportState(prev => ({
+            ...prev,
+            flowStep: 'connecting',
+            selectedPlumber: plumber || undefined
+        }));
+    };
+
+    const handlePlumberConnected = () => {
+        setReportState(prev => ({
+            ...prev,
+            flowStep: 'connected'
+        }));
+    };
+
+    const handleEndCall = () => {
+        const thankYouMsg = "Thank you for using our service. The plumber will contact you shortly. Is there anything else I can help you with?";
+        setMessages(prev => {
+            const msg: UIMessage = { role: 'model', text: thankYouMsg, timestamp: Date.now() };
+            const newMessages = [...prev, msg];
+            if (currentSessionId) {
+                updateSessionMessages(newMessages, currentSessionId);
+            }
+            speak(thankYouMsg);
+            return newMessages;
+        });
+
+        // Reset report state
+        setReportState({
+            isActive: false,
+            flowStep: 'idle',
+            issueData: {}
+        });
+    };
+
     // --- Render ---
     return (
-        <div className="flex h-screen bg-[#09090b] text-zinc-100 font-sans overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-100 relative">
+        <div className={`flex h-screen bg-[#09090b] text-zinc-100 font-sans overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-100 relative ${reportState.isActive ? 'report-mode' : ''}`}>
             <GlobalStyles />
 
-            {isLiveMode && <LiveMode onClose={() => setIsLiveMode(false)} onAddMessage={handleLiveMessage} />}
+            {/* Report Mode Banner */}
+            {reportState.isActive && (
+                <ReportModeBanner onExit={exitReportMode} />
+            )}
+
+            {/* Plumber Connection Modal */}
+            {(reportState.flowStep === 'connecting' || reportState.flowStep === 'connected') && (
+                <PlumberConnectionModal
+                    stage={reportState.flowStep as 'connecting' | 'connected'}
+                    plumber={reportState.selectedPlumber || null}
+                    onClose={() => setReportState(prev => ({ ...prev, flowStep: 'idle', isActive: false }))}
+                    onEndCall={handleEndCall}
+                    onConnected={handlePlumberConnected}
+                />
+            )}
 
             {/* Background Ambient Glows */}
             <div className="fixed top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-cyan-900/10 blur-[120px] pointer-events-none" />
@@ -610,11 +795,15 @@ export default function AquaChat() {
 
                         <button
                             type="button"
-                            onClick={() => setIsLiveMode(true)}
-                            aria-label="Start Live Mode"
-                            className="h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px] hover:bg-zinc-700/50 text-zinc-400 hover:text-green-400 mr-1"
+                            onClick={toggleReportMode}
+                            aria-label={reportState.isActive ? "Exit Report Mode" : "Request Fix"}
+                            className={`h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px] mr-1 ${
+                                reportState.isActive
+                                    ? 'bg-gradient-to-br from-amber-500 to-orange-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]'
+                                    : 'hover:bg-zinc-700/50 text-zinc-400 hover:text-amber-400'
+                            }`}
                         >
-                            <AudioLines size={18} strokeWidth={2.5} />
+                            <Hammer size={18} strokeWidth={2.5} />
                         </button>
 
                         <textarea
