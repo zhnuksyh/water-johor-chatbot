@@ -14,7 +14,9 @@ import {
     PanelLeftOpen,
     X,
     StopCircle,
-    Hammer
+    Hammer,
+    Pencil,
+    Check
 } from 'lucide-react';
 
 // ==========================================
@@ -142,6 +144,10 @@ export default function AquaChat() {
     const [isSidebarOpen, setSidebarOpen] = useState<boolean>(true);
     const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
+    // Editing state for session titles
+    const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+    const [editingTitle, setEditingTitle] = useState<string>("");
+
     // [STATE NOTE]: Controls the TTS (Text-to-Speech) state.
     const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
 
@@ -254,6 +260,35 @@ export default function AquaChat() {
             }
         }
     };
+
+    const startEditingSession = (e: React.MouseEvent, sessionId: string, currentTitle: string) => {
+        e.stopPropagation();
+        setEditingSessionId(sessionId);
+        setEditingTitle(currentTitle);
+    };
+
+    const saveSessionTitle = (e: React.MouseEvent | React.KeyboardEvent, sessionId: string) => {
+        e.stopPropagation();
+        if (editingTitle.trim()) {
+            setSessions(prevSessions =>
+                prevSessions.map(session =>
+                    session.id === sessionId
+                        ? { ...session, title: editingTitle.trim(), updatedAt: Date.now() }
+                        : session
+                )
+            );
+        }
+        setEditingSessionId(null);
+        setEditingTitle("");
+    };
+
+    const cancelEditing = () => {
+        setEditingSessionId(null);
+        setEditingTitle("");
+    };
+
+    // Get current session title
+    const currentSessionTitle = sessions.find(s => s.id === currentSessionId)?.title || "New Conversation";
 
     const updateSessionMessages = (updatedMessages: UIMessage[], sessionId: string) => {
         setSessions(prevSessions => {
@@ -646,29 +681,68 @@ export default function AquaChat() {
                         <div
                             key={session.id}
                             onClick={() => {
-                                setCurrentSessionId(session.id);
-                                if (window.innerWidth < 768) setSidebarOpen(false);
+                                if (editingSessionId !== session.id) {
+                                    setCurrentSessionId(session.id);
+                                    if (window.innerWidth < 768) setSidebarOpen(false);
+                                }
                             }}
                             className={`
-                group flex items-center justify-between p-3.5 px-4 rounded-xl cursor-pointer transition-all duration-300 relative overflow-hidden whitespace-nowrap
+                group flex items-center justify-between p-3.5 px-4 rounded-xl cursor-pointer transition-all duration-300 relative overflow-hidden
                 ${currentSessionId === session.id
                                     ? 'bg-white/10 text-cyan-200 shadow-inner'
                                     : 'hover:bg-white/5 text-zinc-400 hover:text-zinc-200'}
               `}
                         >
-                            <div className="flex items-center gap-3.5 overflow-hidden z-10">
-                                <span className="truncate text-sm font-medium tracking-wide">
-                                    {session.title || "New Conversation"}
-                                </span>
+                            <div className="flex items-center gap-3.5 overflow-hidden z-10 flex-1 min-w-0">
+                                {editingSessionId === session.id ? (
+                                    <input
+                                        type="text"
+                                        value={editingTitle}
+                                        onChange={(e) => setEditingTitle(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                saveSessionTitle(e, session.id);
+                                            } else if (e.key === 'Escape') {
+                                                cancelEditing();
+                                            }
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        autoFocus
+                                        className="bg-zinc-800 text-zinc-100 text-sm font-medium tracking-wide px-2 py-1 rounded-lg outline-none border border-cyan-500/50 w-full"
+                                    />
+                                ) : (
+                                    <span className="truncate text-sm font-medium tracking-wide">
+                                        {session.title || "New Conversation"}
+                                    </span>
+                                )}
                             </div>
 
-                            <button
-                                onClick={(e) => deleteSession(e, session.id)}
-                                aria-label="Delete Session"
-                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:text-red-400 transition-all z-10"
-                            >
-                                <Trash2 size={15} />
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0 z-10">
+                                {editingSessionId === session.id ? (
+                                    <button
+                                        onClick={(e) => saveSessionTitle(e, session.id)}
+                                        aria-label="Save Title"
+                                        className="p-1.5 hover:text-green-400 transition-all"
+                                    >
+                                        <Check size={15} />
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={(e) => startEditingSession(e, session.id, session.title)}
+                                        aria-label="Edit Title"
+                                        className="opacity-0 group-hover:opacity-100 p-1.5 hover:text-cyan-400 transition-all"
+                                    >
+                                        <Pencil size={14} />
+                                    </button>
+                                )}
+                                <button
+                                    onClick={(e) => deleteSession(e, session.id)}
+                                    aria-label="Delete Session"
+                                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:text-red-400 transition-all"
+                                >
+                                    <Trash2 size={15} />
+                                </button>
+                            </div>
                         </div>
                     ))}
                 </div>
@@ -684,7 +758,7 @@ export default function AquaChat() {
 
                 {/* Top Navigation */}
                 <header className="h-20 flex items-center justify-between px-6 md:px-8 absolute top-0 left-0 right-0 z-30 pointer-events-none">
-                    <div className="pointer-events-auto">
+                    <div className="pointer-events-auto flex items-center gap-4">
                         <button
                             onClick={() => setSidebarOpen(!isSidebarOpen)}
                             aria-label="Open Sidebar"
@@ -696,6 +770,15 @@ export default function AquaChat() {
                             <PanelLeftOpen size={22} />
                         </button>
                     </div>
+
+                    {/* Conversation Title */}
+                    <div className="absolute left-1/2 -translate-x-1/2 pointer-events-auto">
+                        <h1 className="text-lg font-semibold text-white truncate max-w-[200px] md:max-w-md tracking-tight">
+                            {currentSessionTitle}
+                        </h1>
+                    </div>
+
+                    <div className="w-10" /> {/* Spacer for balance */}
                 </header>
 
                 {/* Chat Area */}
@@ -777,24 +860,6 @@ export default function AquaChat() {
 
                         <button
                             type="button"
-                            onClick={toggleListening}
-                            aria-label={isListening ? "Stop Recording" : "Start Recording"}
-                            className={`
-                h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px]
-                ${isListening
-                                    ? 'bg-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)] scale-105 rotate-180'
-                                    : 'hover:bg-zinc-700/50 text-zinc-400 hover:text-cyan-400'}
-              `}
-                        >
-                            {isListening ? (
-                                <StopCircle size={18} fill="currentColor" className="text-white" />
-                            ) : (
-                                <Mic size={18} strokeWidth={2.5} />
-                            )}
-                        </button>
-
-                        <button
-                            type="button"
                             onClick={toggleReportMode}
                             aria-label={reportState.isActive ? "Exit Report Mode" : "Request Fix"}
                             className={`h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px] mr-1 ${
@@ -822,20 +887,40 @@ export default function AquaChat() {
                             style={{ minHeight: '36px' }}
                         />
 
-                        <button
-                            type="button"
-                            onClick={handleSend}
-                            disabled={(!inputText.trim() && !isListening) || isGenerating}
-                            aria-label="Send Message"
-                            className={`
-                h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px]
-                ${(!inputText.trim() || isGenerating) && !isListening
-                                    ? 'bg-transparent text-zinc-600 cursor-not-allowed opacity-50'
-                                    : 'bg-gradient-to-br from-cyan-500 to-blue-500 text-white hover:shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:scale-105 active:scale-95'}
-              `}
-                        >
-                            <Send size={16} strokeWidth={2.5} className="ml-0.5" />
-                        </button>
+                        {inputText.trim() ? (
+                            <button
+                                type="button"
+                                onClick={handleSend}
+                                disabled={isGenerating}
+                                aria-label="Send Message"
+                                className={`
+                    h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px]
+                    ${isGenerating
+                                        ? 'bg-transparent text-zinc-600 cursor-not-allowed opacity-50'
+                                        : 'bg-gradient-to-br from-cyan-500 to-blue-500 text-white hover:shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:scale-105 active:scale-95'}
+                  `}
+                            >
+                                <Send size={16} strokeWidth={2.5} className="ml-0.5" />
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={toggleListening}
+                                aria-label={isListening ? "Stop Recording" : "Start Recording"}
+                                className={`
+                    h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px]
+                    ${isListening
+                                        ? 'bg-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)] scale-105'
+                                        : 'hover:bg-zinc-700/50 text-zinc-400 hover:text-cyan-400'}
+                  `}
+                            >
+                                {isListening ? (
+                                    <StopCircle size={18} fill="currentColor" className="text-white" />
+                                ) : (
+                                    <Mic size={18} strokeWidth={2.5} />
+                                )}
+                            </button>
+                        )}
                     </div>
                 </div>
 
