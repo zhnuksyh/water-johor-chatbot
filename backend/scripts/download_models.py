@@ -11,9 +11,8 @@ STT_DIR = MODELS_DIR / "stt"
 TTS_DIR = MODELS_DIR / "tts"
 
 # URLs
-# Using a smaller Phi-3 model for safe/fast downloading in this demo, 
-# but User can swap for Llama-3-8B-Instruct-Q4_K_M.gguf
-LLM_URL = "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf"
+# Swapping to Llama-3-8B-Instruct for better reasoning/logic constraints
+LLM_URL = "https://huggingface.co/bartowski/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf"
 LLM_FILENAME = "model.gguf"
 
 # Piper (Linux x86_64)
@@ -23,8 +22,8 @@ VOICE_CONFIG_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/
 
 def download_file(url, dest_path):
     if dest_path.exists():
-        print(f"File already exists: {dest_path}")
-        return
+        print(f"File exists: {dest_path}. Overwriting for model upgrade...")
+        # return  <-- Commented out to force overwrite for upgrade
     
     print(f"Downloading {url}...")
     try:
