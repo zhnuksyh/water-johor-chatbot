@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+# Trigger reload for model upgrade
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
@@ -48,49 +49,57 @@ llm_model = None
 stt_model = None
 
 # System Persona
-SYSTEM_PROMPT = """You are Aqua, the official virtual assistant for Ranhill SAJ Sdn Bhd (formerly known as SAJ Ranhill, operating under Air Johor).
-Ranhill SAJ is the water utility provider for the state of Johor, Malaysia.
+# System Persona (Optimized for Small Models)
+SYSTEM_PROMPT = """You are Aqua, the support agent for Ranhill SAJ (Water Utility Company).
+YOUR JOB: Answer questions about WATER SERVICES only (water bills, leaks, new connections, meter reading).
 
-COMPANY INFORMATION:
-- Customer Service Hotline: 1-800-88-7474 (toll-free)
-- WhatsApp: 019-779 7474
-- Website: www.saj.com.my
-- Mobile App: SAJ Water available on iOS and Android
-- Operating Hours: 24/7 for emergencies, 8am-5pm for general inquiries
+CRITICAL RULES (FOLLOW STRICTLY):
+1. IGNORE non-water topics. If asked about electricity, food, or general knowledge, say "I only handle water services."
+2. "BILL" ALWAYS MEANS "WATER BILL". Do not ask which bill. Assume it is the Ranhill SAJ water bill.
+3. BE CONCISE. Maximum 2-3 sentences.
+4. USE LISTS. Use bullet points for steps.
+5. IF USER CONTEXT IS PROVIDED, USE IT.
 
-WATER METER KNOWLEDGE:
-- Domestic meters: 15mm (standard residential), 20mm (larger households)
-- Commercial meters: 25mm, 40mm, 50mm and above for businesses
-- How to read: The black numbers show cubic meters (m³) used. Red numbers are decimals (ignore for billing).
-- 1 cubic meter (m³) = 1,000 liters
-- Meters are read monthly by SAJ meter readers
-- Smart meters are being rolled out in some areas for automatic reading
+COMPANY INFO:
+- Hotline: 1-800-88-7474
+- Payment: JomPAY (5132), SAJ App, 7-Eleven.
+- Tariff: <20m3: RM0.60 | 20-35m3: RM1.10 | >35m3: RM2.00.
 
-BILLING & TARIFF (Domestic):
-- 0-20 m³: RM0.60 per m³
-- 21-35 m³: RM1.10 per m³
-- Above 35 m³: RM2.00 per m³
-- Minimum charge: RM6.00/month
-- Bills issued monthly, payment due within 14 days
+Troubleshooting:
+- High Bill? Check for leaks (toilet tank).
+- No Water? Check main valve.
 
-PAYMENT METHODS:
-- SAJ Water App, JomPAY (Biller Code: 5132), Online Banking
-- SAJ counters, Post Office, Bank counters (Maybank, CIMB, RHB, etc.)
-- Selected 7-Eleven outlets
+Respond in a helpful, professional Malaysian tone."""
 
-COMMON ISSUES & TIPS:
-- High bill: Check for toilet leaks (put food coloring in tank, if color appears in bowl without flushing = leak)
-- No water: Check main valve is open, check SAJ website/app for scheduled disruptions
-- Low pressure: May be due to peak hours (6-9am, 6-9pm) or area maintenance
-- Meter not spinning but bill high: Possible underground leak, request meter inspection
-
-SERVICES:
-- New account application, Change of ownership, Meter relocation
-- Pipe leak reports, Water quality complaints, Meter testing requests
-
-You assist customers with bill payments, water disruption alerts, new account applications, and reporting issues.
-You are polite, concise, and professional. Speak in a friendly Malaysian tone.
-Always answer as Aqua. Keep responses under 3 sentences unless asked for details."""
+# Mock User Database (Serial Number -> Data)
+MOCK_USER_DATABASE = {
+    "123456": {
+        "name": "Ali bin Abu",
+        "address": "No 12, Jalan Ria 2, Taman Molek, 81100 JB",
+        "account_no": "SAJ882190",
+        "last_bill_amount": "RM45.50",
+        "last_bill_date": "01 Jan 2026",
+        "billing_status": "Unpaid",
+        "last_payment": "RM40.00 on 10 Dec 2025",
+        "average_usage": "35 m³",
+        "usage_trend": "Stable (Oct: 34m³, Nov: 35m³, Dec: 35m³)",
+        "estimated_breakdown": "Normal household usage (Indoor: 90%, Outdoor: 10%)",
+        "status": "Active"
+    },
+    "789012": {
+        "name": "Siti binti Ahmad",
+        "address": "45, Jalan Merdeka, Skudai, 81300 JB",
+        "account_no": "SAJ110293",
+        "last_bill_amount": "RM120.00",
+        "last_bill_date": "01 Jan 2026",
+        "billing_status": "Unpaid",
+        "last_payment": "RM50.00 on 15 Nov 2025",
+        "average_usage": "60 m³",
+        "usage_trend": "Increasing Spike (Oct: 35m³, Nov: 45m³, Dec: 60m³)",
+        "estimated_breakdown": "High Outdoor Usage detected (Indoor: 40%, Outdoor: 60%)",
+        "status": "High Usage Alert (Possible Leak)"
+    }
+}
 
 # Report Mode System Prompt
 REPORT_MODE_SYSTEM_PROMPT = """You are Aqua from Ranhill SAJ (Air Johor) in REPORT MODE. Your ONLY job is to collect information about a water problem and then connect the customer to a plumber.
@@ -124,7 +133,7 @@ def load_models():
         print(f"Loading LLM from {LLM_PATH}...")
         try:
             # Adjust n_gpu_layers for GPU acceleration if available, n_ctx for context window
-            llm_model = Llama(model_path=str(LLM_PATH), n_ctx=2048, n_gpu_layers=-1, verbose=False)
+            llm_model = Llama(model_path=str(LLM_PATH), n_ctx=4096, n_gpu_layers=-1, verbose=False)
             print("LLM Loaded.")
         except Exception as e:
             print(f"Failed to load LLM: {e}")
@@ -154,6 +163,7 @@ class ChatCompletionRequest(BaseModel):
     messages: List[Message]
     model: Optional[str] = "local-model"
     mode: Optional[str] = "normal"  # "normal" or "report"
+    serial_number: Optional[str] = None
 
 class TTSRequest(BaseModel):
     input: str
@@ -176,12 +186,30 @@ async def chat_completions(request: ChatCompletionRequest):
     print(f"Chat Request ({request.mode}): {request.messages[-1].content[:50]}...")
 
     # Select system prompt based on mode
-    system_prompt = REPORT_MODE_SYSTEM_PROMPT if request.mode == "report" else SYSTEM_PROMPT
+    base_system_prompt = REPORT_MODE_SYSTEM_PROMPT if request.mode == "report" else SYSTEM_PROMPT
+
+    # Inject User Context if Serial Number provided
+    user_context = ""
+    if request.serial_number and request.serial_number in MOCK_USER_DATABASE:
+        user_data = MOCK_USER_DATABASE[request.serial_number]
+        user_context = f"\n\n[OFFICIAL USER DATA - USE THIS FOR ANSWERS]\n" \
+                       f"NAME: {user_data['name']}\n" \
+                       f"ACC NO: {user_data['account_no']}\n" \
+                       f"LAST BILL: {user_data['last_bill_amount']} ({user_data['billing_status']})\n" \
+                       f"USAGE TREND (3 MO): {user_data['usage_trend']}\n" \
+                       f"EST. BREAKDOWN: {user_data['estimated_breakdown']}\n" \
+                       f"STATUS: {user_data['status']}\n\n" \
+                       f"INSTRUCTIONS FOR DATA:\n" \
+                       f"1. Explain 'Why High Bill' using TREND and BREAKDOWN. (e.g., 'Your usage spiked due to {user_data['estimated_breakdown']}').\n" \
+                       f"2. Suggest tips based on BREAKDOWN.\n" \
+                       f"3. Do NOT cite generic reasons if you have this data."
+
+    final_system_prompt = base_system_prompt + user_context
 
     if llm_model:
         # Construct Prompt (Llama-3 Chat Format or generic)
         # Simple format: System + User/Assistant history
-        prompt_messages = [{"role": "system", "content": system_prompt}]
+        prompt_messages = [{"role": "system", "content": final_system_prompt}]
 
         # Convert messages and add mode context for report mode
         for m in request.messages:
@@ -202,9 +230,22 @@ async def chat_completions(request: ChatCompletionRequest):
             print(f"Inference Error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     else:
-        # Fallback Mock
+        # Fallback Mock (Enhanced for Testing Data Injection)
         time.sleep(0.5)
         mock_response = "[MOCK] I am Aqua (Backend LLM not loaded). How can I help?"
+        
+        if request.serial_number and request.serial_number in MOCK_USER_DATABASE:
+            u = MOCK_USER_DATABASE[request.serial_number]
+            last_msg = request.messages[-1].content.lower()
+            if "bill" in last_msg or "high" in last_msg:
+                mock_response = f"[MOCK DATA RESPONSE] Based on your data, in the last 2 months, you have used significant amount of water. Status: {u['status']}. Trend: {u['usage_trend']}."
+            elif "usage" in last_msg:
+                mock_response = f"[MOCK DATA RESPONSE] In the past 3 months, your usage was: {u['usage_trend']}."
+            elif "save" in last_msg:
+                 mock_response = f"[MOCK DATA RESPONSE] Based on your usage ({u['estimated_breakdown']}), you could save water by optimizing outdoor usage."
+            else:
+                 mock_response = f"[MOCK DATA RESPONSE] Verified user {u['name']}. How can I assist with your account?"
+
         if request.mode == "report":
             mock_response = "[MOCK] I understand you have a water issue. Can you describe what's happening?\n[READY_TO_CONNECT]"
         return {
