@@ -34,3 +34,4 @@ services/
 # Security matches
 backend/*.pem
 backend/*.key
+models/
