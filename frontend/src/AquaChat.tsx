@@ -5,6 +5,7 @@ import { getUserProfile } from './services/userProfile';
 import { getRandomAvailablePlumber } from './data/plumbers';
 import ReportModeBanner from './components/ReportModeBanner';
 import PlumberConnectionModal from './components/PlumberConnectionModal';
+import ProfilePage from './ProfilePage';
 import {
     Mic,
     Send,
@@ -16,8 +17,10 @@ import {
     StopCircle,
     Hammer,
     Pencil,
-    Check
+    Check,
+    User
 } from 'lucide-react';
+
 
 // ==========================================
 // CONFIGURATION & CONSTANTS
@@ -137,6 +140,12 @@ export default function AquaChat() {
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [messages, setMessages] = useState<UIMessage[]>([]);
     const [inputText, setInputText] = useState<string>("");
+
+    // User Profile integration
+    // User Profile integration
+    const [serialNumber, setSerialNumber] = useState<string>(() => localStorage.getItem('aqua_serial_number') || "123456");
+    const [showProfile, setShowProfile] = useState<boolean>(false);
+
 
     // [STATE NOTE]: Controls the STT (Speech-to-Text) state.
     const [isListening, setIsListening] = useState<boolean>(false);
@@ -375,7 +384,8 @@ export default function AquaChat() {
         updateSessionMessages(newMessages, currentSessionId);
 
         const historyForApi = newMessages.filter(m => m.role !== 'system' && (m.role === 'user' || m.role === 'model'));
-        const aiText = await chatCompletion(historyForApi, userMsgText, 'normal');
+        const aiText = await chatCompletion(historyForApi, userMsgText, 'normal', serialNumber);
+
 
         const newAiMsg: UIMessage = { role: 'model', text: aiText, timestamp: Date.now() };
         const finalMessages = [...newMessages, newAiMsg];
@@ -619,6 +629,18 @@ export default function AquaChat() {
                 <ReportModeBanner onExit={exitReportMode} />
             )}
 
+            {/* Profile Modal - Moved to root for full screen overlay */}
+            {showProfile && (
+                <ProfilePage
+                    currentSerial={serialNumber}
+                    onSave={(serial) => {
+                        setSerialNumber(serial);
+                        localStorage.setItem('aqua_serial_number', serial);
+                    }}
+                    onClose={() => setShowProfile(false)}
+                />
+            )}
+
             {/* Plumber Connection Modal */}
             {(reportState.flowStep === 'connecting' || reportState.flowStep === 'connected') && (
                 <PlumberConnectionModal
@@ -643,6 +665,8 @@ export default function AquaChat() {
           ${isSidebarOpen ? 'w-[85vw] md:w-80 translate-x-0 opacity-100' : 'w-0 -translate-x-10 opacity-0'}
         `}
             >
+
+
                 {/* Sidebar Header */}
                 <div className="p-5 flex items-center justify-between h-20 shrink-0">
                     <h2 className="text-2xl font-semibold tracking-tight text-white flex items-center gap-3">
@@ -674,6 +698,8 @@ export default function AquaChat() {
                         <span className="font-medium tracking-wide">New Chat</span>
                     </button>
                 </div>
+
+
 
                 {/* Session List */}
                 <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 w-full">
@@ -778,7 +804,19 @@ export default function AquaChat() {
                         </h1>
                     </div>
 
-                    <div className="w-10" /> {/* Spacer for balance */}
+                    {/* Profile Button (Top Right) */}
+                    <div className="pointer-events-auto">
+                        <button
+                            onClick={() => setShowProfile(true)}
+                            className="p-2.5 rounded-full hover:bg-white/10 text-zinc-300 hover:text-cyan-400 transition-all border border-transparent hover:border-white/10 relative"
+                            title={serialNumber ? `Connected: ${serialNumber}` : "Sign In for Personalized Data"}
+                        >
+                            <User size={22} />
+                            {serialNumber && (
+                                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-cyan-500 border-2 border-[#09090b] rounded-full"></span>
+                            )}
+                        </button>
+                    </div>
                 </header>
 
                 {/* Chat Area */}
@@ -862,11 +900,10 @@ export default function AquaChat() {
                             type="button"
                             onClick={toggleReportMode}
                             aria-label={reportState.isActive ? "Exit Report Mode" : "Request Fix"}
-                            className={`h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px] mr-1 ${
-                                reportState.isActive
-                                    ? 'bg-gradient-to-br from-amber-500 to-orange-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]'
-                                    : 'hover:bg-zinc-700/50 text-zinc-400 hover:text-amber-400'
-                            }`}
+                            className={`h-9 w-9 rounded-full transition-all duration-300 shrink-0 flex items-center justify-center cursor-pointer mb-[1px] mr-1 ${reportState.isActive
+                                ? 'bg-gradient-to-br from-amber-500 to-orange-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]'
+                                : 'hover:bg-zinc-700/50 text-zinc-400 hover:text-amber-400'
+                                }`}
                         >
                             <Hammer size={18} strokeWidth={2.5} />
                         </button>
